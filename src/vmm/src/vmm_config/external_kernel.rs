@@ -18,6 +18,8 @@ pub enum KernelFormat {
     ImageGz,
     // ELF image compressed with ZSTD, embedded into an Image file.
     ImageZstd,
+    // x86 bzImage format.
+    BzImage,
 }
 
 /// Data structure holding the attributes read from the `libkrunfw` kernel config.

@@ -794,6 +794,7 @@ int32_t krun_set_firmware(uint32_t ctx_id, const char *firmware_path);
 #define KRUN_KERNEL_FORMAT_IMAGE_BZ2 3
 #define KRUN_KERNEL_FORMAT_IMAGE_GZ 4
 #define KRUN_KERNEL_FORMAT_IMAGE_ZSTD 5
+#define KRUN_KERNEL_FORMAT_BZIMAGE 6
 /**
  * Sets the path to the kernel to be loaded in the microVM.
  *

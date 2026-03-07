@@ -207,6 +207,8 @@ pub struct Vmm {
     mmio_device_manager: MMIODeviceManager,
     #[cfg(target_arch = "x86_64")]
     pio_device_manager: PortIODeviceManager,
+    #[cfg(target_arch = "x86_64")]
+    bzimage_setup_header: Option<arch_gen::x86::bootparam::setup_header>,
 }
 
 impl Vmm {
@@ -288,6 +290,7 @@ impl Vmm {
                 cmdline_len,
                 initrd,
                 vcpus.len() as u8,
+                &self.bzimage_setup_header,
             )
             .map_err(Error::ConfigureSystem)?;
         }

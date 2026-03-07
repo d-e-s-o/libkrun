@@ -21,7 +21,7 @@ use crate::x86_64::layout::{EBDA_START, FIRST_ADDR_PAST_32BITS, MMIO_MEM_START};
 #[cfg(feature = "tee")]
 use crate::x86_64::layout::{FIRMWARE_SIZE, FIRMWARE_START};
 use crate::{ArchMemoryInfo, InitrdConfig};
-use arch_gen::x86::bootparam::{boot_params, E820_RAM};
+use arch_gen::x86::bootparam::{boot_params, setup_header, E820_RAM};
 use vm_memory::Bytes;
 use vm_memory::{Address, ByteValued, GuestAddress, GuestMemoryMmap};
 use vmm_sys_util::align_upwards;
@@ -253,6 +253,7 @@ pub fn configure_system(
     cmdline_size: usize,
     initrd: &Option<InitrdConfig>,
     num_cpus: u8,
+    bzimage_setup_header: &Option<setup_header>,
 ) -> super::Result<()> {
     const KERNEL_BOOT_FLAG_MAGIC: u16 = 0xaa55;
     const KERNEL_HDR_MAGIC: u32 = 0x5372_6448;
@@ -269,13 +270,22 @@ pub fn configure_system(
 
     let mut params: BootParamsWrapper = BootParamsWrapper(boot_params::default());
 
-    params.0.hdr.type_of_loader = KERNEL_LOADER_OTHER;
-    params.0.hdr.boot_flag = KERNEL_BOOT_FLAG_MAGIC;
-    params.0.hdr.header = KERNEL_HDR_MAGIC;
-    params.0.hdr.cmd_line_ptr = cmdline_addr.raw_value() as u32;
-    params.0.hdr.cmdline_size = cmdline_size as u32;
-
-    params.0.hdr.kernel_alignment = KERNEL_MIN_ALIGNMENT_BYTES;
+    if let Some(hdr) = bzimage_setup_header {
+        // Use the setup_header from the bzImage, which contains the kernel's
+        // own boot protocol fields.
+        params.0.hdr = *hdr;
+        // Override fields that the bootloader (us) is responsible for setting.
+        params.0.hdr.type_of_loader = KERNEL_LOADER_OTHER;
+        params.0.hdr.cmd_line_ptr = cmdline_addr.raw_value() as u32;
+        params.0.hdr.cmdline_size = cmdline_size as u32;
+    } else {
+        params.0.hdr.type_of_loader = KERNEL_LOADER_OTHER;
+        params.0.hdr.boot_flag = KERNEL_BOOT_FLAG_MAGIC;
+        params.0.hdr.header = KERNEL_HDR_MAGIC;
+        params.0.hdr.cmd_line_ptr = cmdline_addr.raw_value() as u32;
+        params.0.hdr.cmdline_size = cmdline_size as u32;
+        params.0.hdr.kernel_alignment = KERNEL_MIN_ALIGNMENT_BYTES;
+    }
     if let Some(initrd_config) = initrd {
         params.0.hdr.ramdisk_image = initrd_config.address.raw_value() as u32;
         params.0.hdr.ramdisk_size = initrd_config.size as u32;
@@ -401,7 +411,7 @@ mod tests {
         let no_vcpus = 4;
         let gm = GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap();
         let info = ArchMemoryInfo::default();
-        let config_err = configure_system(&gm, &info, GuestAddress(0), 0, &None, 1);
+        let config_err = configure_system(&gm, &info, GuestAddress(0), 0, &None, 1, &None);
         assert!(config_err.is_err());
         #[cfg(not(feature = "tee"))]
         assert_eq!(
@@ -414,21 +424,21 @@ mod tests {
         let (arch_mem_info, arch_mem_regions) =
             arch_memory_regions(mem_size, Some(KERNEL_LOAD_ADDR), KERNEL_SIZE, 0, None);
         let gm = GuestMemoryMmap::from_ranges(&arch_mem_regions).unwrap();
-        configure_system(&gm, &arch_mem_info, GuestAddress(0), 0, &None, no_vcpus).unwrap();
+        configure_system(&gm, &arch_mem_info, GuestAddress(0), 0, &None, no_vcpus, &None).unwrap();
 
         // Now assigning some memory that is equal to the start of the 32bit memory hole.
         let mem_size = 3328 << 20;
         let (arch_mem_info, arch_mem_regions) =
             arch_memory_regions(mem_size, Some(KERNEL_LOAD_ADDR), KERNEL_SIZE, 0, None);
         let gm = GuestMemoryMmap::from_ranges(&arch_mem_regions).unwrap();
-        configure_system(&gm, &arch_mem_info, GuestAddress(0), 0, &None, no_vcpus).unwrap();
+        configure_system(&gm, &arch_mem_info, GuestAddress(0), 0, &None, no_vcpus, &None).unwrap();
 
         // Now assigning some memory that falls after the 32bit memory hole.
         let mem_size = 3330 << 20;
         let (arch_mem_info, arch_mem_regions) =
             arch_memory_regions(mem_size, Some(KERNEL_LOAD_ADDR), KERNEL_SIZE, 0, None);
         let gm = GuestMemoryMmap::from_ranges(&arch_mem_regions).unwrap();
-        configure_system(&gm, &arch_mem_info, GuestAddress(0), 0, &None, no_vcpus).unwrap();
+        configure_system(&gm, &arch_mem_info, GuestAddress(0), 0, &None, no_vcpus, &None).unwrap();
     }
 
     #[test]

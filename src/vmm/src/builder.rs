@@ -83,6 +83,8 @@ use krun_display::IntoDisplayBackend;
 use kvm_bindings::KVM_MAX_CPUID_ENTRIES;
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 #[cfg(target_arch = "x86_64")]
+use arch_gen::x86::bootparam::setup_header;
+#[cfg(target_arch = "x86_64")]
 use linux_loader::loader::{self, KernelLoader};
 use nix::unistd::isatty;
 use polly::event_manager::{Error as EventManagerError, EventManager};
@@ -116,6 +118,10 @@ pub enum StartMicrovmError {
     CreateKvmIrqChip(kvm_ioctls::Error),
     /// Failed to create a `RateLimiter` object.
     CreateRateLimiter(io::Error),
+    /// Cannot open the file containing the bzImage kernel.
+    BzImageOpenKernel(io::Error),
+    /// Cannot load the bzImage kernel into the VM.
+    BzImageLoadKernel(linux_loader::loader::Error),
     /// Cannot open the file containing the kernel code.
     ElfOpenKernel(io::Error),
     /// Cannot load the kernel into the VM.
@@ -249,6 +255,15 @@ impl Display for StartMicrovmError {
                 write!(f, "Cannot create KVM in-kernel IrqChip: {err}")
             }
             CreateRateLimiter(ref err) => write!(f, "Cannot create RateLimiter: {err}"),
+            BzImageOpenKernel(ref err) => {
+                write!(
+                    f,
+                    "Cannot open the file containing the bzImage kernel: {err}"
+                )
+            }
+            BzImageLoadKernel(ref err) => {
+                write!(f, "Cannot load the bzImage kernel into the VM: {err}")
+            }
             ElfOpenKernel(ref err) => {
                 write!(f, "Cannot open the file containing the kernel code: {err}")
             }
@@ -962,6 +977,8 @@ pub fn build_microvm(
         mmio_device_manager,
         #[cfg(target_arch = "x86_64")]
         pio_device_manager,
+        #[cfg(target_arch = "x86_64")]
+        bzimage_setup_header: payload_config.bzimage_setup_header,
     };
 
     // Set raw mode for FDs that are connected to legacy serial devices.
@@ -1254,6 +1271,20 @@ fn load_external_kernel(
                 return Err(StartMicrovmError::ImageZstdInvalid);
             }
         }
+        #[cfg(target_arch = "x86_64")]
+        KernelFormat::BzImage => {
+            let mut file = File::options()
+                .read(true)
+                .write(false)
+                .open(external_kernel.path.clone())
+                .map_err(StartMicrovmError::BzImageOpenKernel)?;
+            let load_result = loader::BzImage::load(guest_mem, None, &mut file, None)
+                .map_err(StartMicrovmError::BzImageLoadKernel)?;
+            // BzImage::load returns code32_start (the 32-bit entry point), but
+            // libkrun sets up the vCPU in 64-bit long mode. The 64-bit entry
+            // point (startup_64) is at code32_start + 0x200.
+            GuestAddress(load_result.kernel_load.0 + 0x200)
+        }
         _ => return Err(StartMicrovmError::KernelFormatUnsupported),
     };
 
@@ -1417,6 +1448,8 @@ pub struct PayloadConfig {
     entry_addr: GuestAddress,
     initrd_config: Option<InitrdConfig>,
     kernel_cmdline: Option<String>,
+    #[cfg(target_arch = "x86_64")]
+    bzimage_setup_header: Option<setup_header>,
 }
 
 pub fn create_guest_memory(
@@ -1516,10 +1549,42 @@ pub fn create_guest_memory(
         }
     }
 
+    // For BzImage payloads on x86_64, extract the setup_header from the kernel
+    // file to thread into boot_params (zero page) configuration.
+    #[cfg(target_arch = "x86_64")]
+    let bzimage_setup_header = if let Payload::ExternalKernel(ek) = payload {
+        if matches!(ek.format, KernelFormat::BzImage) {
+            let mut file = File::options()
+                .read(true)
+                .write(false)
+                .open(ek.path.clone())
+                .map_err(StartMicrovmError::BzImageOpenKernel)?;
+            // Read just the setup_header (123 bytes at offset 0x1F1 in the bzImage).
+            // The kernel itself was already loaded by load_external_kernel above.
+            use std::io::{Seek, SeekFrom};
+            file.seek(SeekFrom::Start(0x1F1))
+                .map_err(StartMicrovmError::BzImageOpenKernel)?;
+            let mut hdr: setup_header = unsafe { std::mem::zeroed() };
+            let hdr_size = std::mem::size_of::<setup_header>();
+            let hdr_bytes = unsafe {
+                std::slice::from_raw_parts_mut(&mut hdr as *mut _ as *mut u8, hdr_size)
+            };
+            std::io::Read::read_exact(&mut file, hdr_bytes)
+                .map_err(StartMicrovmError::BzImageOpenKernel)?;
+            Some(hdr)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let payload_config = PayloadConfig {
         entry_addr,
         initrd_config,
         kernel_cmdline: cmdline.clone(),
+        #[cfg(target_arch = "x86_64")]
+        bzimage_setup_header,
     };
 
     Ok((guest_mem, arch_mem_info, shm_manager, payload_config))

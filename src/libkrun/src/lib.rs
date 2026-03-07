@@ -2065,6 +2065,8 @@ pub unsafe extern "C" fn krun_set_kernel(
         3 => KernelFormat::ImageBz2,
         4 => KernelFormat::ImageGz,
         5 => KernelFormat::ImageZstd,
+        #[cfg(target_arch = "x86_64")]
+        6 => KernelFormat::BzImage,
         _ => {
             return -libc::EINVAL;
         }

@@ -102,6 +102,10 @@ extern "C" fn sigint_handler(num: c_int, info: *mut siginfo_t, _unused: *mut c_v
     let val: u64 = 1;
     let console_fd = CONSOLE_SIGINT_FD.load(Ordering::Relaxed);
     let _ = unsafe { libc::write(console_fd, &val as *const _ as *const c_void, 8) };
+
+    // Terminate after relaying. This handler is only registered for piped
+    // stdin where SIGINT means "kill the process". 130 = 128 + SIGINT(2).
+    unsafe { _exit(130) };
 }
 
 pub fn register_sigwinch_handler(console_fd: RawFd) -> utils::errno::Result<()> {

@@ -34,6 +34,7 @@ pub(crate) fn process_tx(
                 }
                 Err(e) => {
                     log::error!("Failed to write output: {e}");
+                    return;
                 }
             }
         }

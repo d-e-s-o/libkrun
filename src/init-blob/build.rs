@@ -2,11 +2,16 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::Command;
 
-fn build_default_init() -> PathBuf {
+fn default_init_src_dir() -> PathBuf {
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let libkrun_root = manifest_dir.join("../..");
-    let init_src = libkrun_root.join("init/init.c");
-    let dhcp_src = libkrun_root.join("init/dhcp.c");
+    let dir = manifest_dir.join("../../init");
+    dir
+}
+
+fn build_default_init() -> PathBuf {
+    let init_root = default_init_src_dir();
+    let init_src = init_root.join("init.c");
+    let dhcp_src = init_root.join("dhcp.c");
 
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     let init_bin = out_dir.join("init");
@@ -18,11 +23,11 @@ fn build_default_init() -> PathBuf {
     println!("cargo:rerun-if-changed={}", dhcp_src.display());
     println!(
         "cargo:rerun-if-changed={}",
-        libkrun_root.join("init/jsmn.h").display()
+        init_root.join("jsmn.h").display()
     );
     println!(
         "cargo:rerun-if-changed={}",
-        libkrun_root.join("init/dhcp.h").display()
+        init_root.join("dhcp.h").display()
     );
 
     let mut init_cc_flags = vec!["-O2", "-static", "-Wall"];
@@ -55,10 +60,15 @@ fn main() {
     let init_binary_path = std::env::var_os("KRUN_INIT_BINARY_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            let init_path = build_default_init();
-            // SAFETY: The build script is single threaded.
-            unsafe { std::env::set_var("KRUN_INIT_BINARY_PATH", &init_path) };
-            init_path
+            if default_init_src_dir().exists() {
+                let init_path = build_default_init();
+                // SAFETY: The build script is single threaded.
+                unsafe { std::env::set_var("KRUN_INIT_BINARY_PATH", &init_path) };
+                init_path
+            } else {
+                // XXX: Fall back to an empty init file.
+                PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("dummy")
+            }
         });
     println!(
         "cargo:rustc-env=KRUN_INIT_BINARY_PATH={}",
